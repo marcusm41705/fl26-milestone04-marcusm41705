@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
-
+#include <cstddef>
 #include "aiws/processing_core.hpp"
 #include "aiws/workspace.hpp"
 
@@ -145,6 +145,8 @@ private:
     Workspace workspace_;
     ProcessingCore processing_core_;
     bool corpus_current_{false};
+    int build_delay_ms_{0};
+    std::size_t workspace_revision_{0};
     ExitCallback exit_callback_{nullptr};
 
     WorkspaceWidget* workspace_widget_{nullptr};
@@ -154,6 +156,7 @@ private:
     QLabel* status_label_{nullptr};
     QPushButton* reset_button_{nullptr};
     QPushButton* exit_button_{nullptr};
+    
 };
 
 }  // namespace aiws::gui
