@@ -18,6 +18,14 @@
 #include <utility>
 #include <QCoreApplication>
 #include <QMessageBox>
+#include <cstddef>
+#include <future>
+#include <QTimer>
+#include <chrono>
+#include <future>
+#include <thread>
+#include <utility>
+
 namespace aiws::gui {
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -83,7 +91,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
    //Initializing the workspace states
    workspace_widget_->set_corpus_status("Corpus: Not built");
    update_action_states();
-    
+ //Timer that checks background build completion
+ build_timer_ = new QTimer(this);
+ build_timer_->setInterval(50);
+ connect(build_timer_, &QTimer::timeout, this, &MainWindow::check_build_finished);
 }
 
 void MainWindow::set_exit_callback(ExitCallback callback) noexcept {
@@ -126,6 +137,7 @@ bool MainWindow::add_document_file(const QString& path){
     Document document(document_id.toUtf8().toStdString(), document_title.toUtf8().toStdString(), file_data.toStdString());
     try { //Add document to backend workspace
         workspace_.add_document(document);
+        ++workspace_revision_;
     } catch (const std::exception& error){
         return false;
     }
@@ -142,18 +154,84 @@ void MainWindow::set_build_delay_ms(int ms_per_document){
 
 
 void MainWindow::build_corpus() {
-    //if to stop building an empty workspace
-    if(workspace_.documents().empty()){
+   if(build_in_progress_){ //Don't start another build while this one is running
+    return;
+   }
+   if(workspace_.documents().empty()){
+    return;
+   }
+   Workspace snap = workspace_;
+   const std::size_t revision = workspace_revision_;
+   const int delay_ms = build_delay_ms_;
+   try{
+    build_future_= std::async(std::launch::async, [snap = std::move(snap), delay_ms]()mutable{
+        ProcessingCore new_core;
+        for(const auto& document: snap.documents()){
+            (void)document;
+            if(delay_ms > 0){
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            }
+        }
+        new_core.rebuild(snap);
+        return new_core;
+    });
+
+   } catch(const std::exception& error){
+    corpus_current_ = false;
+    workspace_widget_->set_corpus_status("Corpus: Failed");
+    status_label_->setText(QString("Unable to start build: %1").arg(error.what()));
+    update_action_states();
+    return;
+   }
+   build_revision_ = revision;
+   build_in_progress_ = true;
+   invalidate_corpus();
+   workspace_widget_->set_corpus_status("Corpus: Building...");
+   status_label_->setText("Building corpus in background...");
+   update_action_states();
+   build_timer_->start();
+}
+void MainWindow::check_build_finished(){
+    if(!build_in_progress_){
         return;
     }
-    //Rebuilding using the backend from Milestone 2
-    processing_core_.rebuild(workspace_);
-    corpus_current_ = true; //marking the corpus as current
-    clear_processing_outputs(); //Clearing the previous processing output
-    //Display number of chunks
-    QString chunk_status = QString("Corpus: %1 chunks").arg(static_cast<qulonglong>(processing_core_.chunk_count()));
-    workspace_widget_->set_corpus_status(chunk_status);
-    status_label_->setText("Corpus built successfully.");
+    //Checks whether the background task is completed
+    auto status = build_future_.wait_for(std::chrono::milliseconds(0));
+    //Don't block GUI if worker is still running
+    if(status != std::future_status::ready){
+        return;
+    }
+    build_timer_->stop(); //background operation is finished
+    build_in_progress_ = false;
+    try{
+        //Retrieving the completed ProcessingCore
+        ProcessingCore completed_core = build_future_.get();
+        //Checking whether Workspace has changed during building
+        if(build_revision_ != workspace_revision_){
+            invalidate_corpus();
+            status_label_->setText("Workspace changed, Outdated corpus discarded.");
+            return;
+        }
+        //accepting the valid corpus by transferring ownership
+        processing_core_ = std::move(completed_core);
+        corpus_current_ =true;
+        clear_processing_outputs();
+        //Displays the information for new corpus
+        QString chunk_status_string = QString("Corpus: %1 chunks").arg(static_cast<qulonglong>(processing_core_.chunk_count()));
+        workspace_widget_->set_corpus_status(chunk_status_string);
+        status_label_->setText("Corpus built successfully.");
+    } catch(const std::exception& error){
+        corpus_current_ = false;
+        workspace_widget_->set_corpus_status("Corpus: Failed");
+        status_label_->setText("Corpus build failed.");
+        QMessageBox::warning(this, "Corpus Build Failed", QString::fromUtf8(error.what()));
+
+    } catch(...){
+        corpus_current_ = false;
+        workspace_widget_->set_corpus_status("Corpus: Failed");
+        status_label_->setText("Corpus build failed.");
+        QMessageBox::warning(this, "Corpus Build Failed", "An unknown error occurred during the corpus building.");
+    }
     update_action_states();
 }
 
@@ -253,6 +331,7 @@ void MainWindow::reset_application() {
     //Resetting all major GUI components inside the interface
     //clearing backend workspace
     workspace_.clear();
+    ++workspace_revision_;
     //Marking the existing corpus as invalid 
     corpus_current_ = false;
     //Reset the gui components (polymorphically)
@@ -274,7 +353,7 @@ void MainWindow::exit_application() {
 void MainWindow::update_action_states() {
     //The build corpus needs at least one doc
     bool docs_have = !workspace_.documents().empty();
-    workspace_widget_->set_build_corpus_enabled(docs_have); 
+    workspace_widget_->set_build_corpus_enabled(docs_have && !build_in_progress_);
     //Search needs current corpus and valid query
     bool search_avail = (corpus_current_ && search_widget_->has_query());
     search_widget_->set_search_enabled(search_avail);
@@ -288,7 +367,12 @@ void MainWindow::invalidate_corpus() {
     //Invalidates the existing corpus whenever the workspace changes as previous 
     //results and stats might no longer match the current doc.
     corpus_current_ = false;
-    workspace_widget_->set_corpus_status("Corpus: Not built");
+    if(build_in_progress_){
+        workspace_widget_->set_corpus_status("Corpus: Building...");
+    } else {
+        workspace_widget_->set_corpus_status("Corpus: Not built");
+    }
+    
     clear_processing_outputs();
     update_action_states();
 }

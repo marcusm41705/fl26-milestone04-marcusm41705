@@ -9,7 +9,7 @@ void confirm_exit(QWidget* parent){
     //QT signal or slot mechanisms. 
     
     QMessageBox::StandardButton choice_msg = 
-    QMessageBox::question(parent, "Exit AI Workspace", "Are you sure you want to exit works?"
+    QMessageBox::question(parent, "Exit AI Workspace", "Are you sure you want to exit the Workspace?"
         , QMessageBox::Yes | QMessageBox::No, QMessageBox::No); 
         //Yes quits the app, but no preserves the application state
     if(choice_msg  == QMessageBox::Yes){
@@ -20,6 +20,7 @@ int main(int argc, char* argv[]) {
     //Creating QT app
     QApplication app(argc, argv);
     aiws::gui::MainWindow m_window;
+    m_window.set_build_delay_ms(1000);  //Setting 1000ms to process per document
     //register exit callback
     m_window.set_exit_callback(&confirm_exit); //Main Window invokes this function when Exit button is clicked. 
     //Displaying app window

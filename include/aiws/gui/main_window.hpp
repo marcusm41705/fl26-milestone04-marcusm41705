@@ -2,6 +2,8 @@
 
 #include <QMainWindow>
 #include <cstddef>
+#include <future>
+#include <cstddef>
 #include "aiws/processing_core.hpp"
 #include "aiws/workspace.hpp"
 
@@ -9,6 +11,7 @@ class QLabel;
 class QPushButton;
 class QString;
 class QWidget;
+class QTimer;
 
 namespace aiws::gui {
 
@@ -122,6 +125,11 @@ private slots:
      * @brief Invokes the registered Exit callback for the current exit request.
      */
     void exit_application();
+    
+    /**
+     * @brief Invokes the registered callback for the current background corpus build status
+     */
+     void check_build_finished();
 
 private:
     /**
@@ -145,8 +153,13 @@ private:
     Workspace workspace_;
     ProcessingCore processing_core_;
     bool corpus_current_{false};
-    int build_delay_ms_{0};
-    std::size_t workspace_revision_{0};
+    int build_delay_ms_{0}; //Simulated build delay that can be configured
+    std::size_t build_revision_{0}; //Used to record which workspace revision the worker is building
+    std::size_t workspace_revision_{0}; //Used to track changes in workspace
+    bool build_in_progress_{false}; //Used to indicate whether a background build is active
+    std::future<ProcessingCore> build_future_; //used to hold the result of the background corpus build
+    QTimer* build_timer_{nullptr}; //GUI timer used to check the worker completion
+    
     ExitCallback exit_callback_{nullptr};
 
     WorkspaceWidget* workspace_widget_{nullptr};
