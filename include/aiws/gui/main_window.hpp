@@ -12,6 +12,7 @@ class QPushButton;
 class QString;
 class QWidget;
 class QTimer;
+class QCloseEvent;
 
 namespace aiws::gui {
 
@@ -68,6 +69,7 @@ public:
      */
     void set_build_delay_ms(int ms_per_document);
 
+    void set_fail_nxt_build_for_testing(bool enabled);
     // Everything below this line is the M3 design. In M4 it is yours to
     // change: add, remove, or redesign private members, slots, and helpers.
 
@@ -130,7 +132,8 @@ private slots:
      * @brief Invokes the registered callback for the current background corpus build status
      */
      void check_build_finished();
-
+protected:
+    void closeEvent(QCloseEvent* event) override; //Used to handle attempts to close  application
 private:
     /**
      * @brief Updates availability of actions that depend on current application state.
@@ -149,6 +152,8 @@ private:
      * @brief Clears displayed search and context output that depends on processing state.
      */
     void clear_processing_outputs();
+    //Used to determine that the user requested an exit during building
+    bool exit_pending_{false};
 
     Workspace workspace_;
     ProcessingCore processing_core_;
@@ -159,7 +164,8 @@ private:
     bool build_in_progress_{false}; //Used to indicate whether a background build is active
     std::future<ProcessingCore> build_future_; //used to hold the result of the background corpus build
     QTimer* build_timer_{nullptr}; //GUI timer used to check the worker completion
-    
+    bool fail_nxt_build_for_testing_{false}; //used to force the background build to fail for tests
+    void handle_build_failure(const QString& reason);
     ExitCallback exit_callback_{nullptr};
 
     WorkspaceWidget* workspace_widget_{nullptr};
