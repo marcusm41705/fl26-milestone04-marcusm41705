@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <limits>
 
-std::string default_socket_path(){ //Used to determine the default unix socket location
+std::string def_skt_path(){ //Used to determine the default unix socket location
     const char* user = std::getenv("USER");
     if(user != nullptr && user[0] != '\0'){
         return "/tmp/aiws-" + std::string(user) + ".sock";
@@ -57,7 +57,7 @@ bool recv_all(int socket_fd, void* data, std::size_t length){
 }
 
 int main(int argc, char* argv[]){
-    std::string socket_path = default_socket_path();
+    std::string socket_path = def_skt_path();
     int argument_index = 1;
     //checking for optional custom socket path
     if(argc > 1 && std::string(argv[1]) == "--socket"){
