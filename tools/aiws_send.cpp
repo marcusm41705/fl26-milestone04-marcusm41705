@@ -10,6 +10,32 @@
 #include <arpa/inet.h>
 #include <cstdint>
 #include <limits>
+#include <fcntl.h>
+#include <chrono>
+#include <poll.h>
+using D_Line = std::chrono::steady_clock::time_point;
+
+
+//This function is used to wait for a socket to be ready and does not exceed the d_line.
+bool wait_4_io_send(int socket_fd, short events, D_Line d_line){
+    while(true){
+        auto remain = std::chrono::duration_cast<std::chrono::milliseconds>(d_line - std::chrono::steady_clock::now()).count();
+        if(remain <= 0){
+            return false;
+        }
+        pollfd desc{};
+        desc.fd = socket_fd;
+        desc.events = events;
+        int result = poll(&desc, 1,static_cast<int>(remain));
+        if(result<0 && errno == EINTR){
+            continue;
+        }
+        if(desc.revents & events){
+            return true;
+        }
+        return false; //This indicates an error, invalid desc, or disconnection
+    }
+}
 
 std::string def_skt_path(){ //Used to determine the default unix socket location
     const char* user = std::getenv("USER");
@@ -18,45 +44,129 @@ std::string def_skt_path(){ //Used to determine the default unix socket location
     }
     return "/tmp/aiws-" + std::to_string(getuid()) + ".sock";
 }
-bool send_all(int socket_fd, const void* data, std::size_t length){
+bool send_all(int socket_fd, const void* data, std::size_t length, D_Line d_line){
     const char* bytes = static_cast<const char*>(data); //msg treated as a sequence of bytes
     std::size_t  total_sent = 0;
     while(total_sent < length){ //continues until the complete message is fully transmitted
-        ssize_t sent = send(socket_fd, bytes + total_sent, length - total_sent, MSG_NOSIGNAL);
-        if(sent < 0){
-            if(errno == EINTR){ //retry if interrupted by signal
-                continue;
+        if(std::chrono::steady_clock::now() >= d_line){
+                return false;
+        }
+        ssize_t sent = send(socket_fd, bytes + total_sent, length - total_sent, MSG_NOSIGNAL | MSG_DONTWAIT);
+         if(sent >0 ){
+            total_sent += static_cast<std::size_t>(sent);
+            continue;
+         }
+         if(sent == 0){
+            return false;
+         }
+         if(errno == EINTR){
+            continue;
+        
+         }
+         if(errno == EAGAIN || errno == EWOULDBLOCK){
+            if(!wait_4_io_send(socket_fd, POLLOUT, d_line)){
+                return false;
             }
-            return false;
-        }
-        if(sent == 0){ //no forward progress has been made
-            return false;
-        }
-        total_sent += static_cast<std::size_t>(sent);
+            continue;
+         }
+         return false;
     }
     return true;
 }
-bool recv_all(int socket_fd, void* data, std::size_t length){
+//This function and send all edited for same approach for recieving 
+bool recv_all(int socket_fd, void* data, std::size_t length, D_Line d_line){
     //Treating the received message as sequence of bytes
     char* bytes = static_cast<char*>(data);
     std::size_t total_received = 0;
     while(total_received < length){
-        ssize_t received = recv(socket_fd, bytes + total_received, length - total_received, 0);
-        if(received < 0){
-            if(errno == EINTR){
+        if(std::chrono::steady_clock::now() >= d_line){
+            return false;
+        }
+        ssize_t received = recv(socket_fd, bytes + total_received, length - total_received, MSG_DONTWAIT);
+        if(received > 0){
+            total_received += static_cast<std::size_t>(received);
+            continue;
+            
+        }
+
+        if(received ==0){
+            return false;
+        }
+        if(errno == EINTR){
+            continue;
+        } if (errno ==  EAGAIN || errno == EWOULDBLOCK){
+            if(!wait_4_io_send(socket_fd, POLLIN, d_line)){
+                return false;
+            }
+            continue;
+        }
+        return false;
+    }
+   return true;
+}
+bool connect_with_timeout(int socket_fd, const sockaddr_un& server_address, std::string& error){
+    int flgs = fcntl(socket_fd, F_GETFL, 0);
+    if(flgs == -1 || (fcntl(socket_fd, F_SETFL, flgs | O_NONBLOCK) == -1)){
+        error = "Unable to configure non-blocking socket.";
+        return false;
+    }
+    auto d_line = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    int result = connect(socket_fd, reinterpret_cast<const sockaddr*>(&server_address), sizeof(server_address));
+    if(result == -1){
+        if(errno != EINPROGRESS){ //EINPROGRESS = non-block connection is underway
+            error = std::strerror(errno);
+            return false;
+        }
+        while(true){
+            auto remain = std::chrono::duration_cast<std::chrono::milliseconds>(d_line - std::chrono::steady_clock::now()).count();
+            if(remain <= 0){
+                error = "Connection timed out.";
+                return false;
+            }
+            pollfd desc{};
+            desc.fd = socket_fd;
+            desc.events = POLLOUT;
+            result = poll(&desc, 1, static_cast<int>(remain));
+            if(result == -1 && errno ==  EINTR){
                 continue;
             }
-            return false;
+            if(result == 0){
+                error = "The connection has timed out.";
+                return false;
+            }
+            if(result == -1){
+                error = std::strerror(errno);
+                return false;
+            }
+            int socket_error = 0; //checks whether the connection succeeded.
+            socklen_t error_size = sizeof(socket_error);
+            if(getsockopt(socket_fd, SOL_SOCKET, SO_ERROR,&socket_error,&error_size) == -1){
+                error = std::strerror(errno);
+                return false;
+            }
+            if(socket_error != 0){
+                error = std::strerror(socket_error);
+                return false;
+            }
+            if(desc.revents & POLLNVAL){
+                error = "Invalid socket descriptor.";
+                return false;
+            }
+            if(std::chrono::steady_clock::now() >= d_line){
+                error = "The connection has timed out. ";
+                return false;
+            }
+            break;
         }
-        if(received == 0){
-            return false;
-        }
-        total_received += static_cast<std::size_t>(received);
     }
+    
     return true;
 }
 
+
+
 int main(int argc, char* argv[]){
+    auto d_line = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     std::string socket_path = def_skt_path();
     int argument_index = 1;
     //checking for optional custom socket path
@@ -96,12 +206,14 @@ int main(int argc, char* argv[]){
         return 2;
     }
     std::memcpy(server_address.sun_path, socket_path.c_str(), socket_path.size() + 1);
-    //connecting to the running AI workspace
-    if(connect(socket_fd, reinterpret_cast<sockaddr*>(&server_address), sizeof(server_address)) == -1){
-        std::cerr << "Unable to connect: " << std::strerror(errno) << '\n';
+    //connecting to the running AI workspace within 2 secs
+    std::string connect_err;
+    if(!connect_with_timeout(socket_fd, server_address, connect_err)){
+        std::cerr << "Unable to connect: " << connect_err <<'\n';
         close(socket_fd);
-        return 2;
+        return 2; 
     }
+   
     std::string path_string = document_path.string(); //converting absolute path into bytes
     //verifying path length will fit into protocol
     if(path_string.size() > std::numeric_limits<std::uint32_t>::max()){
@@ -112,27 +224,27 @@ int main(int argc, char* argv[]){
     //encodes the path length by using big endian byte order
     std::uint32_t path_length = htonl(static_cast<std::uint32_t>(path_string.size()));
     //sending four byte length first
-    if(!send_all(socket_fd, &path_length, sizeof(path_length))){
+    if(!send_all(socket_fd, &path_length, sizeof(path_length), d_line)){
         std::cerr << "Failed to send path length.\n";
         close(socket_fd);
         return 2;
     }
-    if(!send_all(socket_fd, path_string.data(), path_string.size())){
+    if(!send_all(socket_fd, path_string.data(), path_string.size(), d_line)){
         std::cerr << "Failed to send the document path.\n";
         close(socket_fd);
         return 2;
     }
     //receiving the one byte response status
     std::uint8_t response_status = 0;
-    if(!recv_all(socket_fd, &response_status, sizeof(response_status))){
-        std::cerr << "Failed to receive server status. \n";
+    if(!recv_all(socket_fd, &response_status, sizeof(response_status), d_line)){
+        std::cerr << "Failed to receive the server status. \n";
         close(socket_fd);
         return 2;
     }
     //recieving the four byte error message length
     std::uint32_t reason_length_network = 0;
-    if(!recv_all(socket_fd, &reason_length_network, sizeof(reason_length_network))){
-        std::cerr << "Failed to receive reason length. \n";
+    if(!recv_all(socket_fd, &reason_length_network, sizeof(reason_length_network), d_line)){
+        std::cerr << "Failed to receive the reason length. \n";
         close(socket_fd);
         return 2;
     }
@@ -145,7 +257,7 @@ int main(int argc, char* argv[]){
         return 2;
     }
     std::string reason(reason_length, '\0');
-    if(!recv_all(socket_fd, reason.data(), reason.size())){
+    if(!recv_all(socket_fd, reason.data(),reason.size(), d_line)){
         std::cerr << "Failed to receive server response.\n";
         close(socket_fd);
         return 2;
@@ -155,7 +267,7 @@ int main(int argc, char* argv[]){
 
     //interpretation of server status
     if(response_status == 0){
-        std::cout << "Document request accepted.\n";
+        std::cout << "The document has been accepted.\n";
         return 0 ;
     }
     if(response_status == 1){
