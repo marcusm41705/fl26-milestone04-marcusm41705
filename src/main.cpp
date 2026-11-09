@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <string>
 #include <unistd.h>
+//final submission comment
 //Determines the default unix socket location
 std::string def_skt_path(){ //Used to determine the default unix socket location
     const char* user = std::getenv("USER");
