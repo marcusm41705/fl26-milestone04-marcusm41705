@@ -3,3 +3,6 @@ build-fault-failure/
 *.o
 .DS_Store
 data/
+dockerfile
+Dockerfile
+STARTER_README.pdf

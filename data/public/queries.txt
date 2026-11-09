@@ -1,4 +1,0 @@
-retrieval index term frequency
-rebuild invariants deterministic
-context token budget ranking
-unknownword synchronization
