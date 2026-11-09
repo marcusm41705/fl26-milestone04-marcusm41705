@@ -1,3 +1,4 @@
 build/
+build-fault-failure/
 *.o
 .DS_Store

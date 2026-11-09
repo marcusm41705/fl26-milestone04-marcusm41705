@@ -13,6 +13,8 @@
 #include <fcntl.h>
 #include <chrono>
 #include <poll.h>
+//using this deadline for both sending + receiving so the complete request
+// response exchange can't five seconds. 
 using D_Line = std::chrono::steady_clock::time_point;
 
 
@@ -45,6 +47,8 @@ std::string def_skt_path(){ //Used to determine the default unix socket location
     return "/tmp/aiws-" + std::to_string(getuid()) + ".sock";
 }
 bool send_all(int socket_fd, const void* data, std::size_t length, D_Line d_line){
+    //This function sends the entire request and retries all partial writes until
+    //all bytes transmitted / communication d_line will expire
     const char* bytes = static_cast<const char*>(data); //msg treated as a sequence of bytes
     std::size_t  total_sent = 0;
     while(total_sent < length){ //continues until the complete message is fully transmitted
@@ -75,6 +79,8 @@ bool send_all(int socket_fd, const void* data, std::size_t length, D_Line d_line
 }
 //This function and send all edited for same approach for recieving 
 bool recv_all(int socket_fd, void* data, std::size_t length, D_Line d_line){
+    // Receives exactly the requested number of bytes.
+    // Handles partial reads and respects the shared communication deadline.
     //Treating the received message as sequence of bytes
     char* bytes = static_cast<char*>(data);
     std::size_t total_received = 0;
@@ -105,6 +111,8 @@ bool recv_all(int socket_fd, void* data, std::size_t length, D_Line d_line){
    return true;
 }
 bool connect_with_timeout(int socket_fd, const sockaddr_un& server_address, std::string& error){
+    //This function attemps to connect to the application within two secs. It uses a nonblocking socket + poll()
+    // to avoid waiting indefinitely when server can't be reached
     int flgs = fcntl(socket_fd, F_GETFL, 0);
     if(flgs == -1 || (fcntl(socket_fd, F_SETFL, flgs | O_NONBLOCK) == -1)){
         error = "Unable to configure non-blocking socket.";

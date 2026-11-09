@@ -60,6 +60,8 @@ int main(int argc, char* argv[]) {
     std::string ipc_path = parser.isSet(ipc_opt) ? parser.value(ipc_opt).toStdString() : def_skt_path();
     //creation of ipc server and connection to main window
     aiws::IPCServer server(ipc_path, [&m_window](std::string path){
+        //IpC listener runs on a separate thread, Queue document additions to MainWindow so changes to Workspace
+        // and widget updates will happen on the GUI thread
         QMetaObject::invokeMethod(&m_window, [&m_window, path = std::move(path)](){
             m_window.add_document_file(QString::fromUtf8(path.data(), static_cast<int>(path.size()) ));
         }, Qt::QueuedConnection); });

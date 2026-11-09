@@ -17,8 +17,10 @@
 namespace aiws{
     namespace{
         using D_line = std::chrono::steady_clock::time_point;
-        //waiting for socket activity while shutdown
+        
         bool wait_4_io(int fd, short events, const std::atomic<bool>& stop, D_line d_line){
+            //Waits until the socket is ready to read or write. The polling in short intervals allows the listener
+            // to be able to respond to shutdown requests without having to indefinitley block. 
             while(!stop.load()){
                 if(std::chrono::steady_clock::now() >= d_line){
                     return false;
@@ -41,6 +43,8 @@ namespace aiws{
             return false;
         }
         bool receive_all(int fd, void* data, std::size_t length, const std::atomic<bool>& stop, D_line d_line){
+            //Used to reconstruct the entire message, even when recv only returns part of the data that was requested. 
+            //It stops if the connection closes, the d_line is expires or a shutdown is requested. 
             char* bytes = static_cast<char*>(data);
             std::size_t rec_total = 0;
             while(rec_total < length && !stop.load()){
@@ -198,6 +202,7 @@ namespace aiws{
     }
 
     void IPCServer::handle_client(int client_fd){
+
         //overall d_line for handling connection
         auto d_line = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         //recieving the four byte path length
@@ -207,8 +212,8 @@ namespace aiws{
         }
         //converting from big endian to byte order of host length
         std::uint32_t path_length = ntohl(netwrk_lth);
-        //rejecting empty/excessive large path
-        if(path_length == 0 || path_length > 4096 ) {
+        //Rejecting empty or unreasonable large lengths before storage is allocated for document path
+        if(path_length == 0 || path_length > 4096 ) { 
             send_response(client_fd, 1, "Invalid document path length.", stop_requested_, d_line);
             return;
         }
@@ -222,10 +227,10 @@ namespace aiws{
             send_response(client_fd, 1, "Invalid document path. ", stop_requested_, d_line);
             return;
         }
-        //checking that doc can be opened for reading
+       //Validating the document before acknowledging the request, and only readable regular files are accepted
         int file_fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
 
-        if(file_fd == -1){
+        if(file_fd ==  -1){
             std::string reason = std::strerror(errno);
             send_response(client_fd, 1, reason, stop_requested_, d_line);
             return;

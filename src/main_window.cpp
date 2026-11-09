@@ -97,7 +97,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
  //Timer that checks background build completion
  build_timer_ = new QTimer(this);
  build_timer_->setInterval(50);
- connect(build_timer_, &QTimer::timeout, this, &MainWindow::check_build_finished);
+ connect(build_timer_, &QTimer::timeout, this, &MainWindow::check_build_fin);
 }
 
 void MainWindow::set_exit_callback(ExitCallback callback) noexcept {
@@ -163,6 +163,9 @@ void MainWindow::build_corpus() {
    if(workspace_.documents().empty()){
     return;
    }
+   //Used to copy the current Workspace before the worker is launched, the background thread
+   //builds from the snapshot while the GUI will remain free to modify the OG Workspace
+
    Workspace snap = workspace_;
    const std::size_t revision = workspace_revision_;
    const int delay_ms = build_delay_ms_;
@@ -200,7 +203,8 @@ void MainWindow::build_corpus() {
    update_action_states();
    build_timer_->start();
 }
-void MainWindow::check_build_finished(){
+void MainWindow::check_build_fin(){
+
     if(!build_in_progress_){
         return;
     }
@@ -226,8 +230,10 @@ void MainWindow::check_build_finished(){
         #ifndef AIWS_FAULT_ACCEPT_STALE
         
         
-        //Checking whether Workspace has changed during building
+        //Completed corpus is valid only if the workspace has not changed since the build started. 
+        // otherwise stale result is discarded to preserve the corpus correctness
         if(build_revision_ != workspace_revision_){
+            //The existing stale-result handling
             invalidate_corpus();
             status_label_->setText("Workspace changed, Outdated corpus discarded.");
             return;
@@ -257,10 +263,10 @@ void MainWindow::check_build_finished(){
 
     } catch(const std::exception& error){
         //reporting the failed build to GUI
-        handle_build_failure(QString::fromUtf8(error.what()));
+        handle_build_fail(QString::fromUtf8(error.what()));
     } catch(...){
        //handling unexpected background build failures
-       handle_build_failure("Unknown corpus build error.");
+       handle_build_fail("Unknown corpus build error.");
     }
     update_action_states();
 }
@@ -420,6 +426,8 @@ void MainWindow::clear_processing_outputs() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event){
+    //if a build is still running, postpone the closing until the worker is done
+    // This prevents the destruction of objects that are still involved in the background processing
     if(build_in_progress_){ //While worker running, stop shutdown
         exit_pending_ = true;
         event->ignore(); //application open until worker is finished
@@ -431,7 +439,9 @@ void MainWindow::closeEvent(QCloseEvent* event){
 void MainWindow::set_fail_nxt_build_for_testing(bool enabled){
     fail_nxt_build_for_testing_ = enabled;
 }
-void MainWindow::handle_build_failure(const QString& reason){
+void MainWindow::handle_build_fail(const QString& reason){
+    //Used to report the background build failures on the gui thread
+    // + transition out of building so user can retry. 
     build_timer_->stop();
     if(exit_pending_){ //during the shutdown, discard failure then exit safely
         build_in_progress_ = false;

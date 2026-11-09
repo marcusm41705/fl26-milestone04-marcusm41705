@@ -131,7 +131,7 @@ private slots:
     /**
      * @brief Invokes the registered callback for the current background corpus build status
      */
-     void check_build_finished();
+     void check_build_fin();
 protected:
     void closeEvent(QCloseEvent* event) override; //Used to handle attempts to close  application
 private:
@@ -165,7 +165,7 @@ private:
     std::future<ProcessingCore> build_future_; //used to hold the result of the background corpus build
     QTimer* build_timer_{nullptr}; //GUI timer used to check the worker completion
     bool fail_nxt_build_for_testing_{false}; //used to force the background build to fail for tests
-    void handle_build_failure(const QString& reason);
+    void handle_build_fail(const QString& reason);
     ExitCallback exit_callback_{nullptr};
 
     WorkspaceWidget* workspace_widget_{nullptr};
